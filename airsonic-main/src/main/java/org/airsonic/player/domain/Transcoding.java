@@ -28,6 +28,7 @@ import jakarta.persistence.GeneratedValue;
 import jakarta.persistence.GenerationType;
 import jakarta.persistence.Id;
 import jakarta.persistence.ManyToMany;
+import jakarta.persistence.PreRemove;
 import jakarta.persistence.Table;
 
 import java.util.ArrayList;
@@ -277,5 +278,14 @@ public class Transcoding {
 
     public int hashCode() {
         return (id != null ? id.hashCode() : 0);
+    }
+
+    @PreRemove
+    private void removePlayerAssociation() {
+        // Remove this transcoding from all players
+        for (Player player : this.players) {
+            player.getTranscodings().remove(this);
+        }
+        this.players.clear();
     }
 }
