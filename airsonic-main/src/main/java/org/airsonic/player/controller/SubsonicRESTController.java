@@ -21,11 +21,10 @@
 package org.airsonic.player.controller;
 
 import com.google.common.primitives.Ints;
-import org.airsonic.player.ajax.LyricsInfo;
-import org.airsonic.player.ajax.LyricsWSController;
 import org.airsonic.player.command.UserSettingsCommand;
 import org.airsonic.player.domain.*;
 import org.airsonic.player.domain.Bookmark;
+import org.airsonic.player.domain.MusicFolder;
 import org.airsonic.player.domain.PlayQueue;
 import org.airsonic.player.domain.User;
 import org.airsonic.player.i18n.LocaleResolver;
@@ -54,6 +53,7 @@ import org.springframework.web.bind.annotation.RequestMethod;
 import org.springframework.web.bind.annotation.RequestParam;
 import org.springframework.web.context.request.ServletWebRequest;
 import org.subsonic.restapi.*;
+import org.subsonic.restapi.Lyrics;
 import org.subsonic.restapi.PodcastStatus;
 
 import jakarta.servlet.http.HttpServletRequest;
@@ -101,8 +101,6 @@ public class SubsonicRESTController {
     @Autowired
     private MusicIndexService musicIndexService;
     @Autowired
-    private TranscodingService transcodingService;
-    @Autowired
     private DownloadController downloadController;
     @Autowired
     private CoverArtController coverArtController;
@@ -110,8 +108,6 @@ public class SubsonicRESTController {
     private AvatarController avatarController;
     @Autowired
     private UserSettingsController userSettingsController;
-    @Autowired
-    private LeftController leftController;
     @Autowired
     private StatusService statusService;
     @Autowired
@@ -123,7 +119,7 @@ public class SubsonicRESTController {
     @Autowired
     private PlaylistService playlistService;
     @Autowired
-    private LyricsWSController lyricsWSController;
+    private LyricsService lyricsService;
     @Autowired
     private PlayQueueService playQueueService;
     @Autowired
@@ -151,8 +147,6 @@ public class SubsonicRESTController {
     @Autowired
     private MediaFolderService mediaFolderService;
     @Autowired
-    private CoverArtService coverArtService;
-    @Autowired
     private LocaleResolver localeResolver;
     @Autowired
     private UserService userService;
@@ -160,6 +154,11 @@ public class SubsonicRESTController {
     private PersonalSettingsService personalSettingsService;
     @Autowired
     private InternetRadioService internetRadioService;
+    @Autowired
+    private LibraryStatusService libraryStatusService;
+    @Autowired
+    private JaxbContentService jaxbContentService;
+
 
     private final JAXBWriter jaxbWriter = new JAXBWriter();
 
@@ -222,9 +221,10 @@ public class SubsonicRESTController {
         request = wrapRequest(request);
         Response res = createResponse();
         String username = securityService.getCurrentUser(request).getUsername();
+        Integer musicFolderId = getIntParameter(request, "musicFolderId");
 
         long ifModifiedSince = getLongParameter(request, "ifModifiedSince", 0L);
-        long lastModified = leftController.getLastModified(request);
+        long lastModified = libraryStatusService.getLastModified(username, musicFolderId);
 
         if (lastModified <= ifModifiedSince) {
             jaxbWriter.writeResponse(request, response, res);
@@ -236,7 +236,6 @@ public class SubsonicRESTController {
         indexes.setIgnoredArticles(settingsService.getIgnoredArticles());
 
         List<org.airsonic.player.domain.MusicFolder> musicFolders = mediaFolderService.getMusicFoldersForUser(username);
-        Integer musicFolderId = getIntParameter(request, "musicFolderId");
         if (musicFolderId != null) {
             for (org.airsonic.player.domain.MusicFolder musicFolder : musicFolders) {
                 if (musicFolderId.equals(musicFolder.getId())) {
@@ -247,7 +246,7 @@ public class SubsonicRESTController {
         }
 
         for (MediaFile shortcut : musicIndexService.getShortcuts(musicFolders)) {
-            indexes.getShortcut().add(createJaxbArtist(shortcut, username));
+            indexes.getShortcut().add(jaxbContentService.createJaxbArtist(shortcut, username));
         }
 
         MusicFolderContent musicFolderContent = musicIndexService.getMusicFolderContent(musicFolders, false);
@@ -280,7 +279,7 @@ public class SubsonicRESTController {
         Player player = playerService.getPlayer(request, response, username);
 
         for (MediaFile singleSong : musicFolderContent.getSingleSongs()) {
-            indexes.getChild().add(createJaxbChild(player, singleSong, username));
+            indexes.getChild().add(jaxbContentService.createJaxbChild(player, singleSong, username));
         }
 
         res.setIndexes(indexes);
@@ -320,7 +319,7 @@ public class SubsonicRESTController {
         List<org.airsonic.player.domain.MusicFolder> musicFolders = mediaFolderService.getMusicFoldersForUser(username, musicFolderId);
 
         for (MediaFile mediaFile : mediaFileService.getSongsByGenre(offset, count, genre, musicFolders)) {
-            songs.getSong().add(createJaxbChild(player, mediaFile, username));
+            songs.getSong().add(jaxbContentService.createJaxbChild(player, mediaFile, username));
         }
         Response res = createResponse();
         res.setSongsByGenre(songs);
@@ -344,7 +343,7 @@ public class SubsonicRESTController {
             result.getIndex().add(index);
             index.setName(entry.getKey().getIndex());
             for (MusicIndex.SortableArtistWithArtist sortableArtist : entry.getValue()) {
-                index.getArtist().add(createJaxbArtist(new ArtistID3(), sortableArtist.getArtist(), username));
+                index.getArtist().add(jaxbContentService.createJaxbArtist(new ArtistID3(), sortableArtist.getArtist(), username));
             }
         }
 
@@ -372,7 +371,7 @@ public class SubsonicRESTController {
         List<MediaFile> similarSongs = lastFmService.getSimilarSongsByMediaFile(mediaFile, count, musicFolders);
         Player player = playerService.getPlayer(request, response, username);
         for (MediaFile similarSong : similarSongs) {
-            result.getSong().add(createJaxbChild(player, similarSong, username));
+            result.getSong().add(jaxbContentService.createJaxbChild(player, similarSong, username));
         }
 
         Response res = createResponse();
@@ -400,7 +399,7 @@ public class SubsonicRESTController {
         List<MediaFile> similarSongs = lastFmService.getSimilarSongs(artist, count, musicFolders);
         Player player = playerService.getPlayer(request, response, username);
         for (MediaFile similarSong : similarSongs) {
-            result.getSong().add(createJaxbChild(player, similarSong, username));
+            result.getSong().add(jaxbContentService.createJaxbChild(player, similarSong, username));
         }
 
         Response res = createResponse();
@@ -422,7 +421,7 @@ public class SubsonicRESTController {
         List<MediaFile> topSongs = lastFmService.getTopSongs(artist, count, musicFolders);
         Player player = playerService.getPlayer(request, response, username);
         for (MediaFile topSong : topSongs) {
-            result.getSong().add(createJaxbChild(player, topSong, username));
+            result.getSong().add(jaxbContentService.createJaxbChild(player, topSong, username));
         }
 
         Response res = createResponse();
@@ -449,7 +448,7 @@ public class SubsonicRESTController {
         List<org.airsonic.player.domain.MusicFolder> musicFolders = mediaFolderService.getMusicFoldersForUser(username);
         List<MediaFile> similarArtists = lastFmService.getSimilarArtistsByMediaFile(mediaFile, count, includeNotPresent, musicFolders);
         for (MediaFile similarArtist : similarArtists) {
-            result.getSimilarArtist().add(createJaxbArtist(similarArtist, username));
+            result.getSimilarArtist().add(jaxbContentService.createJaxbArtist(similarArtist, username));
         }
         ArtistBio artistBio = lastFmService.getArtistBioByMediaFile(mediaFile, localeResolver.resolveLocale(request));
         if (artistBio != null) {
@@ -488,7 +487,7 @@ public class SubsonicRESTController {
         List<org.airsonic.player.domain.MusicFolder> musicFolders = mediaFolderService.getMusicFoldersForUser(username);
         List<org.airsonic.player.domain.Artist> similarArtists = lastFmService.getSimilarArtists(artist, count, includeNotPresent, musicFolders);
         for (org.airsonic.player.domain.Artist similarArtist : similarArtists) {
-            result.getSimilarArtist().add(createJaxbArtist(new ArtistID3(), similarArtist, username));
+            result.getSimilarArtist().add(jaxbContentService.createJaxbArtist(new ArtistID3(), similarArtist, username));
         }
         ArtistBio artistBio = lastFmService.getArtistBio(artist, localeResolver.resolveLocale(request));
         if (artistBio != null) {
@@ -505,27 +504,6 @@ public class SubsonicRESTController {
         jaxbWriter.writeResponse(request, response, res);
     }
 
-    private <T extends ArtistID3> T createJaxbArtist(T jaxbArtist, org.airsonic.player.domain.Artist artist, String username)
-    {
-        jaxbArtist.setId(String.valueOf(artist.getId()));
-        jaxbArtist.setName(artist.getName());
-        jaxbArtist.setStarred(jaxbWriter.convertDate(artistService.getStarredDate(artist.getId(), username)));
-        jaxbArtist.setAlbumCount(artist.getAlbumCount());
-        if (!CoverArt.NULL_ART.equals(coverArtService.getArtistArt(artist.getId()))) {
-            jaxbArtist.setCoverArt(CoverArtController.ARTIST_COVERART_PREFIX + artist.getId());
-        }
-        return jaxbArtist;
-    }
-
-    private org.subsonic.restapi.Artist createJaxbArtist(MediaFile artist, String username) {
-        org.subsonic.restapi.Artist result = new org.subsonic.restapi.Artist();
-        result.setId(String.valueOf(artist.getId()));
-        result.setName(artist.getTitle() != null ? artist.getTitle() : artist.getArtist());
-        Instant starred = mediaFileService.getMediaFileStarredDate(artist, username);
-        result.setStarred(jaxbWriter.convertDate(starred));
-        return result;
-    }
-
     @RequestMapping({"/getArtist", "/getArtist.view"})
     public void getArtist(HttpServletRequest request, HttpServletResponse response) throws Exception {
         request = wrapRequest(request);
@@ -539,9 +517,9 @@ public class SubsonicRESTController {
         }
 
         List<org.airsonic.player.domain.MusicFolder> musicFolders = mediaFolderService.getMusicFoldersForUser(username);
-        ArtistWithAlbumsID3 result = createJaxbArtist(new ArtistWithAlbumsID3(), artist, username);
+        ArtistWithAlbumsID3 result = jaxbContentService.createJaxbArtist(new ArtistWithAlbumsID3(), artist, username);
         for (Album album : albumService.getAlbumsByArtist(artist.getName(), musicFolders)) {
-            result.getAlbum().add(createJaxbAlbum(new AlbumID3(), album, username));
+            result.getAlbum().add(jaxbContentService.createJaxbAlbum(new AlbumID3(), album, username));
         }
 
         Response res = createResponse();
@@ -549,45 +527,6 @@ public class SubsonicRESTController {
         jaxbWriter.writeResponse(request, response, res);
     }
 
-    private <T extends AlbumID3> T createJaxbAlbum(T jaxbAlbum, Album album, String username) {
-        jaxbAlbum.setId(String.valueOf(album.getId()));
-        jaxbAlbum.setName(album.getName());
-        if (album.getArtist() != null) {
-            jaxbAlbum.setArtist(album.getArtist());
-            org.airsonic.player.domain.Artist artist = artistService.getArtist(album.getArtist());
-            if (artist != null) {
-                jaxbAlbum.setArtistId(String.valueOf(artist.getId()));
-            }
-        }
-        if (!CoverArt.NULL_ART.equals(coverArtService.getAlbumArt(album.getId()))) {
-            jaxbAlbum.setCoverArt(CoverArtController.ALBUM_COVERART_PREFIX + album.getId());
-        }
-        jaxbAlbum.setSongCount(album.getSongCount());
-        jaxbAlbum.setDuration((int) Math.round(album.getDuration()));
-        jaxbAlbum.setCreated(jaxbWriter.convertDate(album.getCreated()));
-        jaxbAlbum.setStarred(jaxbWriter.convertDate(albumService.getAlbumStarredDate(album.getId(), username)));
-        jaxbAlbum.setYear(album.getYear());
-        jaxbAlbum.setGenre(album.getGenre());
-        return jaxbAlbum;
-    }
-
-    private <T extends org.subsonic.restapi.Playlist> T createJaxbPlaylist(T jaxbPlaylist, org.airsonic.player.domain.Playlist playlist) {
-        jaxbPlaylist.setId(String.valueOf(playlist.getId()));
-        jaxbPlaylist.setName(playlist.getName());
-        jaxbPlaylist.setComment(playlist.getComment());
-        jaxbPlaylist.setOwner(playlist.getUsername());
-        jaxbPlaylist.setPublic(playlist.getShared());
-        jaxbPlaylist.setSongCount(playlist.getFileCount());
-        jaxbPlaylist.setDuration((int) Math.round(playlist.getDuration()));
-        jaxbPlaylist.setCreated(jaxbWriter.convertDate(playlist.getCreated()));
-        jaxbPlaylist.setChanged(jaxbWriter.convertDate(playlist.getChanged()));
-        jaxbPlaylist.setCoverArt(CoverArtController.PLAYLIST_COVERART_PREFIX + playlist.getId());
-
-        for (String username : playlistService.getPlaylistUsers(playlist.getId())) {
-            jaxbPlaylist.getAllowedUser().add(username);
-        }
-        return jaxbPlaylist;
-    }
 
     @RequestMapping({"/getAlbum", "/getAlbum.view"})
     public void getAlbum(HttpServletRequest request, HttpServletResponse response) throws Exception {
@@ -602,9 +541,9 @@ public class SubsonicRESTController {
             return;
         }
 
-        AlbumWithSongsID3 result = createJaxbAlbum(new AlbumWithSongsID3(), album, username);
+        AlbumWithSongsID3 result = jaxbContentService.createJaxbAlbum(new AlbumWithSongsID3(), album, username);
         for (MediaFile mediaFile : mediaFileService.getSongsForAlbum(album.getArtist(), album.getName())) {
-            result.getSong().add(createJaxbChild(player, mediaFile, username));
+            result.getSong().add(jaxbContentService.createJaxbChild(player, mediaFile, username));
         }
 
         Response res = createResponse();
@@ -630,7 +569,7 @@ public class SubsonicRESTController {
         }
 
         Response res = createResponse();
-        res.setSong(createJaxbChild(player, song, username));
+        res.setSong(jaxbContentService.createJaxbChild(player, song, username));
         jaxbWriter.writeResponse(request, response, res);
     }
 
@@ -671,7 +610,7 @@ public class SubsonicRESTController {
         }
 
         for (MediaFile child : mediaFileService.getVisibleChildrenOf(dir, true, true)) {
-            directory.getChild().add(createJaxbChild(player, child, username));
+            directory.getChild().add(jaxbContentService.createJaxbChild(player, child, username));
         }
 
         Response res = createResponse();
@@ -716,7 +655,7 @@ public class SubsonicRESTController {
         searchResult.setTotalHits(result.getTotalHits());
 
         for (MediaFile mediaFile : result.getMediaFiles()) {
-            searchResult.getMatch().add(createJaxbChild(player, mediaFile, username));
+            searchResult.getMatch().add(jaxbContentService.createJaxbChild(player, mediaFile, username));
         }
         Response res = createResponse();
         res.setSearchResult(searchResult);
@@ -740,21 +679,21 @@ public class SubsonicRESTController {
         criteria.setOffset(getIntParameter(request, "artistOffset", 0));
         org.airsonic.player.domain.SearchResult artists = searchService.search(criteria, musicFolders, IndexType.ARTIST);
         for (MediaFile mediaFile : artists.getMediaFiles()) {
-            searchResult.getArtist().add(createJaxbArtist(mediaFile, username));
+            searchResult.getArtist().add(jaxbContentService.createJaxbArtist(mediaFile, username));
         }
 
         criteria.setCount(getIntParameter(request, "albumCount", 20));
         criteria.setOffset(getIntParameter(request, "albumOffset", 0));
         org.airsonic.player.domain.SearchResult albums = searchService.search(criteria, musicFolders, IndexType.ALBUM);
         for (MediaFile mediaFile : albums.getMediaFiles()) {
-            searchResult.getAlbum().add(createJaxbChild(player, mediaFile, username));
+            searchResult.getAlbum().add(jaxbContentService.createJaxbChild(player, mediaFile, username));
         }
 
         criteria.setCount(getIntParameter(request, "songCount", 20));
         criteria.setOffset(getIntParameter(request, "songOffset", 0));
         org.airsonic.player.domain.SearchResult songs = searchService.search(criteria, musicFolders, IndexType.SONG);
         for (MediaFile mediaFile : songs.getMediaFiles()) {
-            searchResult.getSong().add(createJaxbChild(player, mediaFile, username));
+            searchResult.getSong().add(jaxbContentService.createJaxbChild(player, mediaFile, username));
         }
 
         Response res = createResponse();
@@ -783,13 +722,13 @@ public class SubsonicRESTController {
         int artistOffset = getIntParameter(request, "artistOffset", 0);
         if (StringUtils.isEmpty(query)) {
             if (artistCount > 0) {
-                artistService.getArtists(musicFolders, artistCount, artistOffset).forEach(artist -> searchResult.getArtist().add(createJaxbArtist(new ArtistID3(), artist, username)));
+                artistService.getArtists(musicFolders, artistCount, artistOffset).forEach(artist -> searchResult.getArtist().add(jaxbContentService.createJaxbArtist(new ArtistID3(), artist, username)));
             }
             if (albumCount > 0) {
-                albumService.getAlbums(musicFolders, albumCount, albumOffset).forEach(album -> searchResult.getAlbum().add(createJaxbAlbum(new AlbumID3(), album, username)));
+                albumService.getAlbums(musicFolders, albumCount, albumOffset).forEach(album -> searchResult.getAlbum().add(jaxbContentService.createJaxbAlbum(new AlbumID3(), album, username)));
             }
             if (songCount > 0) {
-                mediaFileService.getSongs(musicFolders, songCount, songOffset).forEach(song -> searchResult.getSong().add(createJaxbChild(player, song, username)));
+                mediaFileService.getSongs(musicFolders, songCount, songOffset).forEach(song -> searchResult.getSong().add(jaxbContentService.createJaxbChild(player, song, username)));
             }
         } else {
             SearchCriteria criteria = new SearchCriteria();
@@ -798,21 +737,21 @@ public class SubsonicRESTController {
             criteria.setOffset(artistOffset);
             org.airsonic.player.domain.SearchResult result = searchService.search(criteria, musicFolders, IndexType.ARTIST_ID3);
             for (org.airsonic.player.domain.Artist artist : result.getArtists()) {
-                searchResult.getArtist().add(createJaxbArtist(new ArtistID3(), artist, username));
+                searchResult.getArtist().add(jaxbContentService.createJaxbArtist(new ArtistID3(), artist, username));
             }
 
             criteria.setCount(albumCount);
             criteria.setOffset(albumOffset);
             result = searchService.search(criteria, musicFolders, IndexType.ALBUM_ID3);
             for (Album album : result.getAlbums()) {
-                searchResult.getAlbum().add(createJaxbAlbum(new AlbumID3(), album, username));
+                searchResult.getAlbum().add(jaxbContentService.createJaxbAlbum(new AlbumID3(), album, username));
             }
 
             criteria.setCount(songCount);
             criteria.setOffset(songOffset);
             result = searchService.search(criteria, musicFolders, IndexType.SONG);
             for (MediaFile song : result.getMediaFiles()) {
-                searchResult.getSong().add(createJaxbChild(player, song, username));
+                searchResult.getSong().add(jaxbContentService.createJaxbChild(player, song, username));
             }
         }
 
@@ -839,7 +778,7 @@ public class SubsonicRESTController {
         Playlists result = new Playlists();
 
         for (org.airsonic.player.domain.Playlist playlist : playlistService.getReadablePlaylistsForUser(requestedUsername)) {
-            result.getPlaylist().add(createJaxbPlaylist(new org.subsonic.restapi.Playlist(), playlist));
+            result.getPlaylist().add(jaxbContentService.createJaxbPlaylist(new org.subsonic.restapi.Playlist(), playlist));
         }
 
         Response res = createResponse();
@@ -864,10 +803,10 @@ public class SubsonicRESTController {
             error(request, response, ErrorCode.NOT_AUTHORIZED, "Permission denied for playlist " + id);
             return;
         }
-        PlaylistWithSongs result = createJaxbPlaylist(new PlaylistWithSongs(), playlist);
+        PlaylistWithSongs result = jaxbContentService.createJaxbPlaylist(new PlaylistWithSongs(), playlist);
         for (MediaFile mediaFile : playlistService.getFilesInPlaylist(id)) {
             if (securityService.isFolderAccessAllowed(mediaFile, username)) {
-                result.getEntry().add(createJaxbChild(player, mediaFile, username));
+                result.getEntry().add(jaxbContentService.createJaxbChild(player, mediaFile, username));
             }
         }
 
@@ -957,7 +896,7 @@ public class SubsonicRESTController {
             result.setGain(gain);
             result.setPosition(position);
             for (MediaFile mediaFile : playQueue.getFiles()) {
-                result.getEntry().add(createJaxbChild(player, mediaFile, username));
+                result.getEntry().add(jaxbContentService.createJaxbChild(player, mediaFile, username));
             }
         } else {
             JukeboxStatus result = new JukeboxStatus();
@@ -1138,7 +1077,7 @@ public class SubsonicRESTController {
 
         AlbumList result = new AlbumList();
         for (MediaFile album : albums) {
-            result.getAlbum().add(createJaxbChild(player, album, username));
+            result.getAlbum().add(jaxbContentService.createJaxbChild(player, album, username));
         }
 
         Response res = createResponse();
@@ -1183,7 +1122,7 @@ public class SubsonicRESTController {
         }
         AlbumList2 result = new AlbumList2();
         for (Album album : albums) {
-            result.getAlbum().add(createJaxbAlbum(new AlbumID3(), album, username));
+            result.getAlbum().add(jaxbContentService.createJaxbAlbum(new AlbumID3(), album, username));
         }
         Response res = createResponse();
         res.setAlbumList2(result);
@@ -1207,7 +1146,7 @@ public class SubsonicRESTController {
 
         Songs result = new Songs();
         for (MediaFile mediaFile : searchService.getRandomSongs(criteria)) {
-            result.getSong().add(createJaxbChild(player, mediaFile, username));
+            result.getSong().add(jaxbContentService.createJaxbChild(player, mediaFile, username));
         }
         Response res = createResponse();
         res.setRandomSongs(result);
@@ -1226,7 +1165,7 @@ public class SubsonicRESTController {
 
         Videos result = new Videos();
         for (MediaFile mediaFile : mediaFileService.getVideos(musicFolders, size, offset)) {
-            result.getVideo().add(createJaxbChild(player, mediaFile, username));
+            result.getVideo().add(jaxbContentService.createJaxbChild(player, mediaFile, username));
         }
         Response res = createResponse();
         res.setVideos(result);
@@ -1238,107 +1177,20 @@ public class SubsonicRESTController {
         request = wrapRequest(request);
         NowPlaying result = new NowPlaying();
 
-        Stream.concat(statusService.getActivePlays().parallelStream(),
-                statusService.getInactivePlays().parallelStream())
-            .map(info -> info.fromPlayStatus())
+        Stream.concat(statusService.getActivePlayStatuses().stream(),
+                statusService.getInactivePlayStatuses().stream())
             .forEach(s -> {
                 NowPlayingEntry entry = new NowPlayingEntry();
                 entry.setUsername(s.getPlayer().getUsername());
                 entry.setPlayerId(s.getPlayer().getId());
                 entry.setPlayerName(s.getPlayer().getName());
                 entry.setMinutesAgo((int) s.getMinutesAgo());
-                result.getEntry().add(createJaxbChild(entry, s.getPlayer(), s.getMediaFile(), entry.getUsername()));
+                result.getEntry().add(jaxbContentService.createJaxbChild(entry, s.getPlayer(), s.getMediaFile(), entry.getUsername()));
             });
 
         Response res = createResponse();
         res.setNowPlaying(result);
         jaxbWriter.writeResponse(request, response, res);
-    }
-
-    private Child createJaxbChild(Player player, MediaFile mediaFile, String username) {
-        return createJaxbChild(new Child(), player, mediaFile, username);
-    }
-
-    private <T extends Child> T createJaxbChild(T child, Player player, MediaFile mediaFile, String username) {
-        MediaFile parent = mediaFileService.getParentOf(mediaFile);
-        child.setId(String.valueOf(mediaFile.getId()));
-        try {
-            if (Objects.nonNull(parent) && !mediaFileService.isRoot(parent)) {
-                child.setParent(String.valueOf(parent.getId()));
-            }
-        } catch (SecurityException x) {
-            // Ignored.
-        }
-        child.setTitle(mediaFile.getName());
-        child.setAlbum(mediaFile.getAlbumName());
-        child.setArtist(mediaFile.getArtist());
-        child.setIsDir(mediaFile.isDirectory());
-        child.setCoverArt(findCoverArt(mediaFile, parent));
-        child.setYear(mediaFile.getYear());
-        child.setGenre(mediaFile.getGenre());
-        child.setCreated(jaxbWriter.convertDate(mediaFile.getCreated()));
-        child.setStarred(jaxbWriter.convertDate(mediaFileService.getMediaFileStarredDate(mediaFile, username)));
-        child.setUserRating(ratingService.getRatingForUser(username, mediaFile));
-        child.setAverageRating(ratingService.getAverageRating(mediaFile));
-        child.setPlayCount((long) mediaFile.getPlayCount());
-
-        if (mediaFile.isFile()) {
-            Double mediaFileDuration = mediaFile.getDuration();
-            child.setDuration((int) Math.round(mediaFileDuration == null ? 0 : mediaFileDuration));
-            child.setBitRate(mediaFile.getBitRate());
-            child.setTrack(mediaFile.getTrackNumber());
-            child.setDiscNumber(mediaFile.getDiscNumber());
-            child.setSize(mediaFile.getFileSize());
-            String suffix = mediaFile.getFormat();
-            child.setSuffix(suffix);
-            child.setContentType(StringUtil.getMimeType(suffix));
-            child.setIsVideo(mediaFile.isVideo());
-            child.setPath(mediaFile.getPath());
-            child.setIsrc(mediaFile.getISRC());
-
-            Album album = albumService.getAlbumByMediaFile(mediaFile);
-
-            if (album != null) {
-                child.setAlbumId(String.valueOf(album.getId()));
-            }
-            org.airsonic.player.domain.Artist artist = artistService.getArtist(mediaFile.getArtist());
-            if (artist != null) {
-                child.setArtistId(String.valueOf(artist.getId()));
-            }
-            switch (mediaFile.getMediaType()) {
-                case MUSIC:
-                    child.setType(org.subsonic.restapi.MediaType.MUSIC);
-                    break;
-                case PODCAST:
-                    child.setType(org.subsonic.restapi.MediaType.PODCAST);
-                    break;
-                case AUDIOBOOK:
-                    child.setType(org.subsonic.restapi.MediaType.AUDIOBOOK);
-                    break;
-                case VIDEO:
-                    child.setType(org.subsonic.restapi.MediaType.VIDEO);
-                    child.setOriginalWidth(mediaFile.getWidth());
-                    child.setOriginalHeight(mediaFile.getHeight());
-                    break;
-                default:
-                    break;
-            }
-
-            if (transcodingService.isTranscodingRequired(mediaFile, player)) {
-                String transcodedSuffix = transcodingService.getSuffix(player, mediaFile, null);
-                child.setTranscodedSuffix(transcodedSuffix);
-                child.setTranscodedContentType(StringUtil.getMimeType(transcodedSuffix));
-            }
-        }
-        return child;
-    }
-
-    private String findCoverArt(MediaFile mediaFile, MediaFile parent) {
-        MediaFile dir = mediaFile.isDirectory() ? mediaFile : parent;
-        if (dir != null && !CoverArt.NULL_ART.equals(coverArtService.getMediaFileArt(dir.getId()))) {
-            return String.valueOf(dir.getId());
-        }
-        return null;
     }
 
     @RequestMapping({"/download", "/download.view"})
@@ -1507,13 +1359,13 @@ public class SubsonicRESTController {
 
         Starred result = new Starred();
         for (MediaFile artist : mediaFileService.getStarredArtists(0, Integer.MAX_VALUE, username, musicFolders)) {
-            result.getArtist().add(createJaxbArtist(artist, username));
+            result.getArtist().add(jaxbContentService.createJaxbArtist(artist, username));
         }
         for (MediaFile album : mediaFileService.getStarredAlbums(0, Integer.MAX_VALUE, username, musicFolders)) {
-            result.getAlbum().add(createJaxbChild(player, album, username));
+            result.getAlbum().add(jaxbContentService.createJaxbChild(player, album, username));
         }
         for (MediaFile song : mediaFileService.getStarredSongs(0, Integer.MAX_VALUE, username, musicFolders)) {
-            result.getSong().add(createJaxbChild(player, song, username));
+            result.getSong().add(jaxbContentService.createJaxbChild(player, song, username));
         }
         Response res = createResponse();
         res.setStarred(result);
@@ -1530,13 +1382,13 @@ public class SubsonicRESTController {
 
         Starred2 result = new Starred2();
         for (org.airsonic.player.domain.Artist artist : artistService.getStarredArtists(username, musicFolders)) {
-            result.getArtist().add(createJaxbArtist(new ArtistID3(), artist, username));
+            result.getArtist().add(jaxbContentService.createJaxbArtist(new ArtistID3(), artist, username));
         }
         for (Album album : albumService.getStarredAlbums(username, musicFolders)) {
-            result.getAlbum().add(createJaxbAlbum(new AlbumID3(), album, username));
+            result.getAlbum().add(jaxbContentService.createJaxbAlbum(new AlbumID3(), album, username));
         }
         for (MediaFile song : mediaFileService.getStarredSongs(0, Integer.MAX_VALUE, username, musicFolders)) {
-            result.getSong().add(createJaxbChild(player, song, username));
+            result.getSong().add(jaxbContentService.createJaxbChild(player, song, username));
         }
         Response res = createResponse();
         res.setStarred2(result);
@@ -1604,7 +1456,7 @@ public class SubsonicRESTController {
 
         if (episode.getMediaFile() != null) {
             MediaFile mediaFile = episode.getMediaFile();
-            e = createJaxbChild(new org.subsonic.restapi.PodcastEpisode(), player, mediaFile, username);
+            e = jaxbContentService.createJaxbChild(new org.subsonic.restapi.PodcastEpisode(), player, mediaFile, username);
             e.setStreamId(String.valueOf(mediaFile.getId()));
         }
 
@@ -1744,7 +1596,7 @@ public class SubsonicRESTController {
             b.setChanged(jaxbWriter.convertDate(bookmark.getChanged()));
 
             MediaFile mediaFile = mediaFileService.getMediaFile(bookmark.getMediaFileId());
-            b.setEntry(createJaxbChild(player, mediaFile, username));
+            b.setEntry(jaxbContentService.createJaxbChild(player, mediaFile, username));
         }
 
         Response res = createResponse();
@@ -1797,7 +1649,7 @@ public class SubsonicRESTController {
 
         for (MediaFile mediaFile : playQueue.getMediaFiles()) {
             if (mediaFile != null) {
-                restPlayQueue.getEntry().add(createJaxbChild(player, mediaFile, username));
+                restPlayQueue.getEntry().add(jaxbContentService.createJaxbChild(player, mediaFile, username));
             }
         }
 
@@ -1839,7 +1691,7 @@ public class SubsonicRESTController {
             result.getShare().add(s);
 
             for (MediaFile mediaFile : shareService.getSharedFiles(share.getId(), musicFolders)) {
-                s.getEntry().add(createJaxbChild(player, mediaFile, username));
+                s.getEntry().add(jaxbContentService.createJaxbChild(player, mediaFile, username));
             }
         }
         Response res = createResponse();
@@ -1879,7 +1731,7 @@ public class SubsonicRESTController {
         List<org.airsonic.player.domain.MusicFolder> musicFolders = mediaFolderService.getMusicFoldersForUser(username);
 
         for (MediaFile mediaFile : shareService.getSharedFiles(share.getId(), musicFolders)) {
-            s.getEntry().add(createJaxbChild(player, mediaFile, username));
+            s.getEntry().add(jaxbContentService.createJaxbChild(player, mediaFile, username));
         }
 
         Response res = createResponse();
@@ -2195,12 +2047,18 @@ public class SubsonicRESTController {
         request = wrapRequest(request);
         String artist = request.getParameter("artist");
         String title = request.getParameter("title");
-        LyricsInfo lyrics = lyricsWSController.getLyrics(artist, title);
+
+        String username = securityService.getCurrentUsername(request);
+        List<MusicFolder> musicFolders = mediaFolderService.getMusicFoldersForUser(username);
+
 
         Lyrics result = new Lyrics();
-        result.setArtist(lyrics.getArtist());
-        result.setTitle(lyrics.getTitle());
-        result.setContent(lyrics.getLyrics());
+        result.setArtist(artist);
+        result.setTitle(title);
+        org.airsonic.player.domain.Lyrics lyrics = lyricsService.getLyricsFromArtistAndTitle(artist, title, musicFolders);
+        if (lyrics != null) {
+            result.setContent(lyrics.getLyrics());
+        }
 
         Response res = createResponse();
         res.setLyrics(result);
