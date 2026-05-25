@@ -151,7 +151,7 @@ public class JaxbContentService {
         child.setAverageRating(ratingService.getAverageRating(mediaFile));
         child.setPlayCount((long) mediaFile.getPlayCount());
         child.setIsrc(mediaFile.getISRC());
-        
+
         if (mediaFile.isFile()) {
             Double mediaFileDuration = mediaFile.getDuration();
             child.setDuration((int) Math.round(mediaFileDuration == null ? 0 : mediaFileDuration));

@@ -503,7 +503,7 @@ public class SubsonicRESTController {
         res.setArtistInfo2(result);
         jaxbWriter.writeResponse(request, response, res);
     }
-    
+
     @RequestMapping({"/getArtist", "/getArtist.view"})
     public void getArtist(HttpServletRequest request, HttpServletResponse response) throws Exception {
         request = wrapRequest(request);
