@@ -74,7 +74,7 @@ jobs:
           echo "tag=$tag" >> $GITHUB_OUTPUT
           echo "minor=$minor" >> $GITHUB_OUTPUT
           echo "major=$major" >> $GITHUB_OUTPUT
-     - name: Upload war
+      - name: Upload war
         if: ${{matrix.cfg.jdk == 21 && matrix.cfg.platform == 'linux/amd64'}}
         uses: actions/upload-artifact@v4
         with:
