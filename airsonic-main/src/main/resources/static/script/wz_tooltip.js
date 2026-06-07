@@ -114,7 +114,16 @@ function Tip()
 }
 function TagToTip()
 {
-	var t2t = tt_GetElt(arguments[0]);
+	var id = arguments[0];
+	// Only allow standard element ID characters to prevent DOM text from being
+	// reinterpreted as HTML through later innerHTML rendering.
+	if(!/^[A-Za-z][\w\-:\.]*$/.test(id))
+	{
+		if(tt_Debug)
+			tt_Err("Invalid ID\n'" + id + "'\npassed to TagToTip().", true);
+		return;
+	}
+	var t2t = tt_GetElt(id);
 	if(t2t)
 		tt_Tip(arguments, t2t);
 }
